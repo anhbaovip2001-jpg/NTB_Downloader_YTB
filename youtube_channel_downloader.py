@@ -83,6 +83,9 @@ class YouTubeChannelDownloader:
         self.is_downloading = False
         self.download_executor = None
         
+        # Optimize: Reuse requests session for connection pooling
+        self.session = requests.Session()
+        
         self.setup_ui()
         self.load_settings()
         
@@ -217,6 +220,9 @@ class YouTubeChannelDownloader:
     def on_closing(self):
         """Xử lý khi đóng app"""
         self.save_settings()
+        # Close requests session to free resources
+        if hasattr(self, 'session'):
+            self.session.close()
         self.root.destroy()
         
     def setup_ui(self):
@@ -611,7 +617,7 @@ class YouTubeChannelDownloader:
             'type': 'channel',
             'key': api_key
         }
-        response = requests.get(url, params=params)
+        response = self.session.get(url, params=params)
         data = response.json()
         
         if 'items' in data and len(data['items']) > 0:
@@ -626,7 +632,7 @@ class YouTubeChannelDownloader:
             'id': channel_id,
             'key': api_key
         }
-        response = requests.get(url, params=params)
+        response = self.session.get(url, params=params)
         data = response.json()
         
         if 'items' in data and len(data['items']) > 0:
@@ -649,7 +655,7 @@ class YouTubeChannelDownloader:
             if next_page_token:
                 params['pageToken'] = next_page_token
                 
-            response = requests.get(url, params=params)
+            response = self.session.get(url, params=params)
             data = response.json()
             
             if 'error' in data:
@@ -686,7 +692,7 @@ class YouTubeChannelDownloader:
                 'id': ','.join(batch),
                 'key': api_key
             }
-            response = requests.get(url, params=params)
+            response = self.session.get(url, params=params)
             data = response.json()
             
             if 'items' in data:
@@ -875,7 +881,8 @@ class YouTubeChannelDownloader:
                 self.log(f"⚠️ Không tìm thấy thumbnail cho {filename_base}")
                 return False
                 
-            response = requests.get(thumb_url, timeout=30)
+            # Use session for connection pooling (faster)
+            response = self.session.get(thumb_url, timeout=30)
             if response.status_code != 200:
                 self.log(f"⚠️ Không thể tải thumbnail: HTTP {response.status_code}")
                 return False
@@ -896,10 +903,12 @@ class YouTubeChannelDownloader:
                 
             target_size = self.get_target_thumbnail_size()
             if img.size != target_size:
-                img = img.resize(target_size, Image.Resampling.LANCZOS)
+                # Use BILINEAR for faster processing, LANCZOS is CPU-intensive
+                img = img.resize(target_size, Image.Resampling.BILINEAR)
                 
             output_path = os.path.join(output_dir, f"{filename_base}.jpg")
-            img.save(output_path, 'JPEG', quality=95)
+            # Use lower quality JPEG for faster saving and smaller file size
+            img.save(output_path, 'JPEG', quality=85, optimize=False)
             
             return True
             
@@ -1020,11 +1029,13 @@ class YouTubeChannelDownloader:
             
             output_file = os.path.join(output_dir, f'{filename_base}.mp4')
             
-            # Build ffmpeg postprocessor args với FPS
+            # Optimize: Use stream copy when possible to avoid CPU-intensive re-encoding
             if fps == "original":
-                ffmpeg_args = '-c:v libx264 -c:a aac'
+                # Use copy codec to avoid re-encoding (much faster, less CPU)
+                ffmpeg_args = '-c:v copy -c:a copy'
             else:
-                ffmpeg_args = f'-c:v libx264 -r {fps} -c:a aac'
+                # Only re-encode when FPS conversion is needed
+                ffmpeg_args = f'-c:v libx264 -preset ultrafast -r {fps} -c:a aac'
             
             cmd = base_cmd + [
                 '-f', format_str,
@@ -1032,6 +1043,10 @@ class YouTubeChannelDownloader:
                 '--merge-output-format', 'mp4',
                 '--postprocessor-args', f'ffmpeg:{ffmpeg_args}',
                 '--no-playlist',
+                # Performance optimizations for faster downloads
+                '--concurrent-fragments', '4',
+                '--buffer-size', '16K',
+                '--http-chunk-size', '10M',
                 video_url
             ]
             self._run_command(cmd, f"Video {filename_base}")
@@ -1049,6 +1064,9 @@ class YouTubeChannelDownloader:
                 '--audio-quality', audio_bitrate,
                 '-o', output_file,
                 '--no-playlist',
+                # Performance optimizations
+                '--concurrent-fragments', '4',
+                '--buffer-size', '16K',
                 video_url
             ]
             self._run_command(cmd, f"Audio {filename_base}")
@@ -1078,7 +1096,8 @@ class YouTubeChannelDownloader:
                 text=True,
                 creationflags=creationflags
             )
-            stdout, stderr = process.communicate(timeout=600)
+            # Increase timeout to 30 minutes for large files
+            stdout, stderr = process.communicate(timeout=1800)
             
             if process.returncode == 0:
                 self.log(f"✅ {description} - Thành công")
@@ -1088,7 +1107,7 @@ class YouTubeChannelDownloader:
                 
         except subprocess.TimeoutExpired:
             process.kill()
-            self.log(f"⚠️ {description} - Timeout")
+            self.log(f"⚠️ {description} - Timeout (quá 30 phút)")
         except Exception as e:
             self.log(f"❌ {description} - Command error: {str(e)}")
 
