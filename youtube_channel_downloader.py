@@ -10,6 +10,9 @@ import sys
 import subprocess
 import json
 
+# ==================== Configuration Constants ====================
+DOWNLOAD_TIMEOUT_SECONDS = 1800  # 30 minutes timeout for downloads
+
 # ==================== Xác định đường dẫn cho PyInstaller ====================
 def get_base_path():
     """Lấy đường dẫn gốc, hỗ trợ cả khi chạy từ .py và .exe"""
@@ -1047,7 +1050,6 @@ class YouTubeChannelDownloader:
                 '--no-playlist',
                 # Performance optimizations for faster downloads
                 '--concurrent-fragments', '4',
-                '--buffer-size', '16K',
                 '--http-chunk-size', '10M',
                 video_url
             ]
@@ -1068,7 +1070,6 @@ class YouTubeChannelDownloader:
                 '--no-playlist',
                 # Performance optimizations
                 '--concurrent-fragments', '4',
-                '--buffer-size', '16K',
                 video_url
             ]
             self._run_command(cmd, f"Audio {filename_base}")
@@ -1098,8 +1099,8 @@ class YouTubeChannelDownloader:
                 text=True,
                 creationflags=creationflags
             )
-            # Increase timeout to 30 minutes for large files
-            stdout, stderr = process.communicate(timeout=1800)
+            # Use configurable timeout for downloads
+            stdout, stderr = process.communicate(timeout=DOWNLOAD_TIMEOUT_SECONDS)
             
             if process.returncode == 0:
                 self.log(f"✅ {description} - Thành công")
@@ -1109,7 +1110,8 @@ class YouTubeChannelDownloader:
                 
         except subprocess.TimeoutExpired:
             process.kill()
-            self.log(f"⚠️ {description} - Timeout (quá 30 phút)")
+            timeout_minutes = DOWNLOAD_TIMEOUT_SECONDS // 60
+            self.log(f"⚠️ {description} - Timeout (quá {timeout_minutes} phút)")
         except Exception as e:
             self.log(f"❌ {description} - Command error: {str(e)}")
 
